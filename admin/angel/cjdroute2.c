@@ -61,7 +61,13 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <getopt.h>
+#include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <linux/limits.h>
+#define MAX_PATH PATH_MAX
 
 #define DEFAULT_TUN_DEV "tun0"
 
@@ -334,28 +340,44 @@ static int usage(struct Allocator* alloc, char* appName)
 {
     char* archInfo = ArchInfo_describe(ArchInfo_detect(), alloc);
     char* sysInfo = SysInfo_describe(SysInfo_detect(), alloc);
-    printf("Cjdns %s %s\n"
-           "Usage: %s [--help] [--genconf] [--bench] [--version] [--cleanconf] [--nobg]\n"
-           "\n"
-           "To get the router up and running.\n"
-           "Step 1:\n"
-           "  Generate a new configuration file.\n"
-           "    %s --genconf > cjdroute.conf\n"
-           "\n"
-           "Step 2:\n"
-           "  Find somebody to connect to.\n"
-           "  Check out the IRC channel or http://hyperboria.net/\n"
-           "  for information about how to meet new people and make connect to them.\n"
-           "\n"
-           "Step 3:\n"
-           "  Fire it up!\n"
-           "    sudo %s < cjdroute.conf\n"
-           "\n"
-           "For more information about other functions and non-standard setups, see README.md\n",
-           archInfo, sysInfo, appName, appName, appName);
+    printf("Cjdns %s %s\n\n"
+           "Usage:\n"
+           "\t"
+           "Options:\n"
+           "\t--help\t\t\t\tShow this screen.\n"
+           "\t--genconf\t\t\tGenerate a new config file\n"
+           "\t--bench\t\t\t\tRun benchmarks\n"
+           "\t--nobg\t\t\t\tRun in foreground\n"
+           "\t--config </etc/cjdroute.conf>\tSpecify a configuration file\n\n"
+           "Examples:\n"
+           "\t./cjdroute --genconf > /etc/cjdroute.conf\n"
+           "\t./cjdroute < /etc/cjdroute.conf\n"
+           "\t./cjdroute --config /etc/cjdroute.conf\n"
+           "\t./cjdroute --config /etc/cjdroute.conf --nobg\n\n",
+           archInfo, sysInfo);
+    // printf("Cjdns %s %s\n"
+    //        "Usage: %s [--help] [--genconf] [--bench] [--version] [--cleanconf] [--nobg]\n"
+    //        "\n"
+    //        "To get the router up and running.\n"
+    //        "Step 1:\n"
+    //        "  Generate a new configuration file.\n"
+    //        "    %s --genconf > cjdroute.conf\n"
+    //        "\n"
+    //        "Step 2:\n"
+    //        "  Find somebody to connect to.\n"
+    //        "  Check out the IRC channel or http://hyperboria.net/\n"
+    //        "  for information about how to meet new people and make connect to them.\n"
+    //        "\n"
+    //        "Step 3:\n"
+    //        "  Fire it up!\n"
+    //        "    sudo %s < cjdroute.conf\n"
+    //        "\n"
+    //        "For more information about other functions and non-standard setups, see README.md\n",
+    //        archInfo, sysInfo, appName, appName, appName);
 
     return 0;
 }
+
 
 static int benchmark()
 {
@@ -429,6 +451,94 @@ static void checkRunningInstance(struct Allocator* allocator,
 
 int main(int argc, char** argv)
 {
+
+    int c;
+    //int ret = 0;
+    //char *configFilePath = NULL;
+    FILE *configFile = NULL;
+    //char *logfile = NULL;
+    //char *loglevel = NULL;
+    static int forceNoBackground;
+    static int angel_flag;
+    static int core_flag;
+
+    Assert_ifParanoid(argc > 0);
+    struct Except* eh = NULL;
+
+    // Allow it to allocate 8MB
+    struct Allocator* allocator = MallocAllocator_new(1<<23);
+    struct Random* rand = Random_new(allocator, NULL, eh);
+    struct EventBase* eventBase = EventBase_new(allocator);
+
+    if (argc == 1) { return usage(allocator, argv[0]); exit(0); }
+
+    while (1)
+    {
+        static struct option long_options[] =
+        {
+            {"nobg", no_argument, &forceNoBackground, 1},
+            {"angel", no_argument, &angel_flag, 1},
+            {"core", no_argument, &core_flag, 1},
+            {"genconf", no_argument, 0, 'g'},
+            {"bench",no_argument, 0, 'b'},
+            {"config", required_argument, 0, 'c'},
+            {"log",required_argument,0,'l'},
+            {"loglevel",required_argument,0,'v'},
+            {"pidfile",required_argument,0,'p'},
+            {0,0,0,0}
+        };
+
+
+        int option_index = 0;
+
+        c = getopt_long (argc, argv, "gc:l:v:p:", long_options, &option_index);
+
+        if (c == -1) { printf("eep\n"); break; }
+
+        switch (c)
+        {
+            case 0:
+                if (long_options[option_index].flag != 0) { break; }
+                printf ("option %s", long_options[option_index].name);
+                if (optarg) { printf(" with arg %s", optarg); }
+                printf ("\n");
+                break;
+            case 'c':
+                if (CString_strlen(optarg) <= MAX_PATH)
+                {
+                    //configFilePath = (char *)MallocAllocator_new(MAX_PATH);
+                    //CString_strncpy((char *)configFilePath,optarg,MAX_PATH);
+                    configFile = fopen(optarg,"r");
+                    if (configFile == NULL) {
+                        fprintf(stderr,"Fatal error: Cannot open %s\n: %s",
+                            optarg,strerror(errno));
+                    }
+                    printf("config file is %s\n",optarg);
+                } else {
+                    printf("error: config file too long\n");
+                    exit(1);
+                }
+                break;
+            case 'g':
+                return genconf(rand);
+                break;
+            case 'b':
+                return benchmark();
+                break;
+            default:
+                return usage(allocator, argv[0]);
+                exit(0);
+                break;
+            }
+        }
+
+    //if (!angel_flag) { return AngelInit_main(argc, argv); }
+    //else if (!core_flag) { return Core_main(argc, argv); }
+
+
+
+    //exit(0);
+
     #ifdef Log_KEYS
         fprintf(stderr, "Log_LEVEL = KEYS, EXPECT TO SEE PRIVATE KEYS IN YOUR LOGS!\n");
     #endif
@@ -441,14 +551,8 @@ int main(int argc, char** argv)
         return Core_main(argc, argv);
     }
 
-    Assert_ifParanoid(argc > 0);
-    struct Except* eh = NULL;
 
-    // Allow it to allocate 8MB
-    struct Allocator* allocator = MallocAllocator_new(1<<23);
-    struct Random* rand = Random_new(allocator, NULL, eh);
-    struct EventBase* eventBase = EventBase_new(allocator);
-
+/*
     if (argc == 2) {
         // one argument
         if ((CString_strcmp(argv[1], "--help") == 0) || (CString_strcmp(argv[1], "-h") == 0)) {
@@ -487,36 +591,44 @@ int main(int argc, char** argv)
             fprintf(stderr, "\n'--pidfile' option is deprecated.\n");
         }
         return -1;
+    } */
+
+    // if (isatty(STDIN_FILENO)) {
+    //     // We were started from a terminal
+    //     // The chances an user wants to type in a configuration
+    //     // bij hand are pretty slim so we show him the usage
+    //     //return usage(allocator, argv[0]);
+    // } else {
+    //     // We assume stdin is a configuration file and that we should
+    //     // start routing
+    // }
+
+    struct Reader* configReader;
+    if (!configFile)
+    {
+        configReader = FileReader_new(stdin, allocator);
+    } else
+    {
+        configReader = FileReader_new(configFile, allocator);
     }
 
-    if (isatty(STDIN_FILENO)) {
-        // We were started from a terminal
-        // The chances an user wants to type in a configuration
-        // bij hand are pretty slim so we show him the usage
-        return usage(allocator, argv[0]);
-    } else {
-        // We assume stdin is a configuration file and that we should
-        // start routing
-    }
-
-    struct Reader* stdinReader = FileReader_new(stdin, allocator);
     Dict config;
-    if (JsonBencSerializer_get()->parseDictionary(stdinReader, allocator, &config)) {
+    if (JsonBencSerializer_get()->parseDictionary(configReader, allocator, &config)) {
         fprintf(stderr, "Failed to parse configuration.\n");
         return -1;
     }
 
-    if (argc == 2 && CString_strcmp(argv[1], "--cleanconf") == 0) {
-        struct Writer* stdoutWriter = FileWriter_new(stdout, allocator);
-        JsonBencSerializer_get()->serializeDictionary(stdoutWriter, &config);
-        printf("\n");
-        return 0;
-    }
+    // if (argc == 2 && CString_strcmp(argv[1], "--cleanconf") == 0) {
+    //     struct Writer* stdoutWriter = FileWriter_new(stdout, allocator);
+    //     JsonBencSerializer_get()->serializeDictionary(stdoutWriter, &config);
+    //     printf("\n");
+    //     return 0;
+    // }
 
-    int forceNoBackground = 0;
-    if (argc == 2 && CString_strcmp(argv[1], "--nobg") == 0) {
-        forceNoBackground = 1;
-    }
+    //int forceNoBackground = 0;
+    // if (argc == 2 && CString_strcmp(argv[1], "--nobg") == 0) {
+    //     forceNoBackground = 1;
+    // }
 
     struct Writer* logWriter = FileWriter_new(stdout, allocator);
     struct Log* logger = WriterLog_new(logWriter, allocator);
